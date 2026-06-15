@@ -30587,7 +30587,8 @@ function scanPackageJson(file, contents, context) {
 function scanNodeVersionFile(file, contents, context) {
   const value = contents.split(/\s+/u).find(Boolean) ?? "";
   if (!value) return [];
-  if (isFloatingNodeValue(value) && !context.options.allowFloating) {
+  if (isFloatingNodeValue(value)) {
+    if (context.options.allowFloating) return [];
     return [makeViolation({
       file,
       line: 1,
@@ -30715,21 +30716,23 @@ async function scanWorkflow(file, contents, context) {
         const trimmed = nodeVersion.trim();
         const matrixValues = matrixValuesFor(job, trimmed);
         const valuesToCheck = matrixValues.length > 0 ? matrixValues : [trimmed];
-        if (isFloatingNodeValue(trimmed) && !context.options.allowFloating) {
-          violations.push(makeViolation({
-            file,
-            line: lineFor(contents, "node-version:"),
-            kind: "setup-node",
-            title: "setup-node uses a floating Node version",
-            message: `${file} uses setup-node node-version ${trimmed}; pin Node ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
-            current: trimmed,
-            expected: context.preferredMajor,
-            fixable: true,
-            fix: `Set node-version to ${context.preferredMajor}.`
-          }));
-          continue;
-        }
         for (const valueToCheck of valuesToCheck) {
+          if (isFloatingNodeValue(valueToCheck)) {
+            if (!context.options.allowFloating) {
+              violations.push(makeViolation({
+                file,
+                line: lineFor(contents, "node-version:"),
+                kind: "setup-node",
+                title: "setup-node uses a floating Node version",
+                message: `${file} uses setup-node node-version ${valueToCheck}; pin Node ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
+                current: valueToCheck,
+                expected: context.preferredMajor,
+                fixable: matrixValues.length === 0,
+                fix: matrixValues.length === 0 ? `Set node-version to ${context.preferredMajor}.` : `Remove ${valueToCheck} from the setup-node matrix or replace it with ${context.preferredMajor}.`
+              }));
+            }
+            continue;
+          }
           const meetsMinimum = nodeVersionMeetsMinimum(valueToCheck, context.minimumMajor);
           if (meetsMinimum === false || meetsMinimum === void 0) {
             violations.push(makeViolation({

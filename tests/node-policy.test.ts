@@ -529,6 +529,48 @@ describe('checkNodePolicy', () => {
     expect(result.violations).toEqual([]);
   });
 
+  test('allows floating version files and setup-node declarations when configured', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, '.nvmrc', 'node\n');
+    await write(root, '.node-version', 'latest\n');
+    await write(root, '.github/workflows/ci.yml', [
+      'name: ci',
+      'on: [pull_request]',
+      'jobs:',
+      '  direct:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version: node',
+      '  matrix:',
+      '    runs-on: ubuntu-latest',
+      '    strategy:',
+      '      matrix:',
+      '        node: [lts/*, 24]',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version: ${{ matrix.node }}',
+      ''
+    ].join('\n'));
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: true,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('passed');
+    expect(result.violations).toEqual([]);
+  });
+
   test('scans Dockerfile variants', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
