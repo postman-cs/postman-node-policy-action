@@ -1,0 +1,55 @@
+name: 'Postman Node Runtime Policy'
+description: Enforce Node.js 22+ declarations and dependency engine compatibility across repositories.
+author: Postman
+branding:
+  icon: shield
+  color: orange
+inputs:
+  minimum-node-version:
+    description: Minimum allowed Node.js version or major.
+    required: false
+    default: '22'
+  preferred-node-version:
+    description: Preferred Node.js major used for safe first-party fixes.
+    required: false
+    default: '24'
+  dependency-policy:
+    description: Dependency engine policy. compatible fails packages that cannot run on Node 22+; floor also fails packages whose engine range permits lower Node versions.
+    required: false
+    default: compatible
+  scan-dependencies:
+    description: Whether to scan lockfile dependency engines.
+    required: false
+    default: 'true'
+  allow-floating:
+    description: Whether floating Node declarations such as node, latest, or lts/* are allowed.
+    required: false
+    default: 'false'
+  allow-missing:
+    description: Whether package.json files may omit engines.node.
+    required: false
+    default: 'false'
+  fix-mode:
+    description: Safe fix mode. none reports only; write updates first-party Node declarations in the workspace.
+    required: false
+    default: none
+  ignore-paths:
+    description: Comma- or newline-separated paths to ignore in addition to .git, node_modules, dist, coverage, .next, and .turbo.
+    required: false
+    default: ''
+outputs:
+  status:
+    description: passed or failed.
+  checked-count:
+    description: Number of files scanned.
+  violation-count:
+    description: Number of remaining policy violations.
+  fixed-count:
+    description: Number of files changed by fix-mode=write.
+  changed-files-json:
+    description: JSON array of files changed by fix-mode=write.
+  summary-json:
+    description: Machine-readable summary of the policy result and violations.
+runs:
+  using: node24
+  main: dist/index.cjs

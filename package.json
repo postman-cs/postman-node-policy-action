@@ -1,0 +1,56 @@
+{
+  "name": "@postman-cse/node-policy-action",
+  "version": "1.0.0",
+  "description": "Enforce Postman CS Node.js runtime policy in GitHub repositories.",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "bin": {
+    "postman-node-policy": "dist/cli.cjs"
+  },
+  "files": [
+    "action.yml",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run typecheck && rm -rf dist && esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.cjs && esbuild src/cli.ts --bundle --platform=node --target=node24 --format=cjs --banner:js='#!/usr/bin/env node' --outfile=dist/cli.cjs",
+    "check:dist": "npm run build && git diff --exit-code -- dist",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "github-action",
+    "node",
+    "policy",
+    "postman"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "semver": "^7.7.3",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.12.4",
+    "@types/semver": "^7.7.1",
+    "esbuild": "^0.28.0",
+    "eslint": "^10.4.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.0",
+    "vitest": "^4.1.7"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/postman-cs/postman-node-policy-action"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

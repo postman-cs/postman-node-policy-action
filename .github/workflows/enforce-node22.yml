@@ -1,0 +1,20 @@
+name: Enforce Node 22 Policy
+
+on:
+  pull_request: {}
+  merge_group: {}
+
+permissions:
+  contents: read
+
+jobs:
+  node-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: postman-cs/postman-node-policy-action@v1
+        with:
+          minimum-node-version: '22'
+          preferred-node-version: '24'
+          dependency-policy: compatible
+          scan-dependencies: 'true'
