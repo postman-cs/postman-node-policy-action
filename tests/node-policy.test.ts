@@ -151,6 +151,34 @@ describe('checkNodePolicy', () => {
     ]);
   });
 
+  test('fails package-lock files that lack package engine metadata', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'package-lock.json', `${JSON.stringify({
+      lockfileVersion: 1,
+      dependencies: {
+        legacy: { version: '1.0.0' }
+      }
+    }, null, 2)}\n`);
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations[0]).toMatchObject({
+      file: 'package-lock.json',
+      kind: 'unsupported-package-lock',
+      current: 'package-lock.json'
+    });
+  });
+
   test('reports scoped dependency names from package-lock paths when metadata omits name', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
@@ -206,6 +234,36 @@ describe('checkNodePolicy', () => {
     });
     expect(result.summary).toContain('yarn install --immutable');
     expect(result.summary).not.toContain('npm pkg set engines.node');
+  });
+
+  test('accepts yarn lockfiles when another lockfile provides dependency metadata', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'package-lock.json', `${JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'app', version: '1.0.0' },
+        'node_modules/current': {
+          version: '1.0.0',
+          engines: { node: '>=22' }
+        }
+      }
+    }, null, 2)}\n`);
+    await write(root, 'yarn.lock', '# yarn lockfile v1\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('passed');
+    expect(result.violations).toEqual([]);
   });
 
   test('scans installed package manifests for yarn repos when node_modules is present', async () => {
@@ -290,6 +348,71 @@ describe('checkNodePolicy', () => {
       kind: 'invalid-package-json',
       title: 'Invalid package.json'
     });
+  });
+
+  test('fails malformed structured policy files instead of passing silently', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'action.yml', 'runs: [\n');
+    await write(root, '.github/workflows/ci.yml', 'jobs: [\n');
+    await write(root, 'package-lock.json', '{ "lockfileVersion": 3, "packages": ');
+    await write(root, 'pnpm-lock.yaml', 'packages: [\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.violations.map((violation) => `${violation.file}:${violation.kind}`)).toEqual(expect.arrayContaining([
+      '.github/workflows/ci.yml:invalid-workflow-yaml',
+      'action.yml:invalid-action-yaml',
+      'package-lock.json:invalid-package-lock',
+      'pnpm-lock.yaml:invalid-pnpm-lock'
+    ]));
+  });
+
+  test('fails floating Docker Node base images', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'Dockerfile', 'FROM node:latest\nFROM node:bookworm AS build\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations.map((violation) => ({
+      file: violation.file,
+      kind: violation.kind,
+      current: violation.current,
+      title: violation.title
+    }))).toEqual([
+      {
+        file: 'Dockerfile',
+        kind: 'docker-node',
+        current: 'latest',
+        title: 'Docker image uses a floating Node version'
+      },
+      {
+        file: 'Dockerfile',
+        kind: 'docker-node',
+        current: 'bookworm',
+        title: 'Docker image uses an unverifiable Node version'
+      }
+    ]);
   });
 
   test('writes safe fixes for first-party Node declarations', async () => {

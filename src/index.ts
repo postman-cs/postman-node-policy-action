@@ -50,6 +50,7 @@ interface ScanContext {
   minimumRange: string;
   minimumEngineRange: string;
   preferredMajor: string;
+  hasDependencyMetadataLock: boolean;
   options: PolicyOptions;
 }
 
@@ -174,8 +175,31 @@ function makeViolation(input: Omit<PolicyViolation, 'fixable'> & { fixable?: boo
   };
 }
 
+function invalidStructuredFileViolation(
+  file: string,
+  kind: string,
+  title: string,
+  format: string
+): PolicyViolation {
+  return makeViolation({
+    file,
+    line: 1,
+    kind,
+    title,
+    message: `${file} could not be parsed, so Node runtime policy cannot be verified.`,
+    current: `invalid ${format}`,
+    expected: `valid ${format}`,
+    fixable: false,
+    fix: `Fix the ${format} syntax, then rerun the policy check.`
+  });
+}
+
 function hasDefaultIgnoredSegment(relPath: string): boolean {
   return relPath.split('/').some((segment) => DEFAULT_IGNORES.has(segment));
+}
+
+function hasDependencyMetadataLock(files: string[]): boolean {
+  return files.some((file) => /^package-lock\.json$/iu.test(file.split('/').at(-1) ?? '') || /^pnpm-lock\.yaml$/iu.test(file.split('/').at(-1) ?? ''));
 }
 
 async function listFiles(rootDir: string, ignorePaths: string[] = []): Promise<string[]> {
@@ -345,7 +369,7 @@ function scanActionMetadata(file: string, contents: string, context: ScanContext
   try {
     parsed = parseYaml(contents);
   } catch {
-    return violations;
+    return [invalidStructuredFileViolation(file, 'invalid-action-yaml', 'Invalid GitHub Action metadata', 'YAML')];
   }
   const runs = asRecord(asRecord(parsed)?.runs);
   const using = asString(runs?.using);
@@ -386,7 +410,7 @@ async function scanWorkflow(file: string, contents: string, context: ScanContext
   try {
     parsed = parseYaml(contents);
   } catch {
-    return violations;
+    return [invalidStructuredFileViolation(file, 'invalid-workflow-yaml', 'Invalid GitHub workflow YAML', 'YAML')];
   }
   const jobs = asRecord(asRecord(parsed)?.jobs);
   if (!jobs) return violations;
@@ -470,10 +494,38 @@ function scanDockerfile(file: string, contents: string, context: ScanContext): P
   const violations: PolicyViolation[] = [];
   const lines = contents.split(/\r?\n/u);
   for (const [index, line] of lines.entries()) {
-    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node:(\d+(?:\.\d+){0,2})\b/iu.exec(line);
+    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node:([^\s@]+)\b/iu.exec(line);
     if (!match) continue;
     const value = match[1] ?? '';
+    if (isFloatingNodeValue(value) && !context.options.allowFloating) {
+      violations.push(makeViolation({
+        file,
+        line: index + 1,
+        kind: 'docker-node',
+        title: 'Docker image uses a floating Node version',
+        message: `${file} uses node:${value}; pin Node ${context.preferredMajor} or another version ${context.minimumEngineRange} or newer.`,
+        current: value,
+        expected: context.preferredMajor,
+        fixable: false,
+        fix: `Use a node:${context.preferredMajor} base image.`
+      }));
+      continue;
+    }
     const meetsMinimum = nodeVersionMeetsMinimum(value, context.minimumMajor);
+    if (meetsMinimum === undefined) {
+      violations.push(makeViolation({
+        file,
+        line: index + 1,
+        kind: 'docker-node',
+        title: 'Docker image uses an unverifiable Node version',
+        message: `${file} uses node:${value}; use an explicit Node ${context.minimumEngineRange} or newer base image.`,
+        current: value,
+        expected: context.preferredMajor,
+        fixable: false,
+        fix: `Use a node:${context.preferredMajor} base image.`
+      }));
+      continue;
+    }
     if (meetsMinimum === false) {
       violations.push(makeViolation({
         file,
@@ -513,10 +565,22 @@ function scanPackageLock(file: string, contents: string, context: ScanContext): 
   try {
     parsed = JSON.parse(contents) as MutableRecord;
   } catch {
-    return violations;
+    return [invalidStructuredFileViolation(file, 'invalid-package-lock', 'Invalid package-lock.json', 'JSON')];
   }
   const packages = asRecord(parsed.packages);
-  if (!packages) return violations;
+  if (!packages) {
+    return [makeViolation({
+      file,
+      line: 1,
+      kind: 'unsupported-package-lock',
+      title: 'package-lock.json lacks dependency engine metadata',
+      message: `${file} does not include packages metadata, so dependency Node engines cannot be verified from the lockfile.`,
+      current: file,
+      expected: 'package-lock.json lockfileVersion 2 or 3 with packages metadata',
+      fixable: false,
+      fix: 'Regenerate package-lock.json with a current npm version, then rerun the policy check.'
+    })];
+  }
   for (const [lockPath, metadata] of Object.entries(packages)) {
     if (!lockPath || !lockPath.includes('node_modules')) continue;
     const packageRecord = asRecord(metadata);
@@ -546,7 +610,7 @@ function scanPnpmLock(file: string, contents: string, context: ScanContext): Pol
   try {
     parsed = parseYaml(contents);
   } catch {
-    return violations;
+    return [invalidStructuredFileViolation(file, 'invalid-pnpm-lock', 'Invalid pnpm lockfile', 'YAML')];
   }
   const packages = asRecord(asRecord(parsed)?.packages);
   if (!packages) return violations;
@@ -580,7 +644,7 @@ async function hasInstalledPackages(rootDir: string): Promise<boolean> {
 }
 
 async function scanYarnLock(file: string, context: ScanContext): Promise<PolicyViolation[]> {
-  if (!context.options.scanDependencies || await hasInstalledPackages(context.rootDir)) return [];
+  if (!context.options.scanDependencies || context.hasDependencyMetadataLock || await hasInstalledPackages(context.rootDir)) return [];
   return [makeViolation({
     file,
     line: 1,
@@ -790,6 +854,8 @@ function suggestedCommandsForViolations(violations: PolicyViolation[], context: 
       commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.current);
     } else if (violation.kind === 'unsupported-lockfile') {
       commands.add('yarn install --immutable || yarn install --frozen-lockfile');
+    } else if (violation.kind === 'unsupported-package-lock') {
+      commands.add('npm install --package-lock-only');
     } else if (violation.kind === 'dependency-engine') {
       commands.add('# ' + violation.fix);
     } else if (violation.fix) {
@@ -807,6 +873,8 @@ export async function checkNodePolicy(options: PolicyOptions): Promise<PolicyRes
   }
 
   const minimum = normalizeMinimumVersion(options.minimumNodeVersion);
+  const files = await listFiles(rootDir, options.ignorePaths);
+  const initialHasDependencyMetadataLock = hasDependencyMetadataLock(files);
   const context: ScanContext = {
     rootDir,
     minimum,
@@ -814,13 +882,12 @@ export async function checkNodePolicy(options: PolicyOptions): Promise<PolicyRes
     minimumRange: `>=${minimum}`,
     minimumEngineRange: minimumEngineRange(options.minimumNodeVersion),
     preferredMajor: String(majorOf(options.preferredNodeVersion)),
+    hasDependencyMetadataLock: initialHasDependencyMetadataLock,
     options
   };
 
-  const files = await listFiles(rootDir, options.ignorePaths);
   let violations = (await Promise.all(files.map((file) => scanFile(file, context)))).flat();
-  const hasDependencyMetadataLock = files.some((file) => /^package-lock\.json$/iu.test(file.split('/').at(-1) ?? '') || /^pnpm-lock\.yaml$/iu.test(file.split('/').at(-1) ?? ''));
-  if (!hasDependencyMetadataLock) {
+  if (!initialHasDependencyMetadataLock) {
     violations.push(...await scanInstalledPackageManifests(context));
   }
   violations = violations.sort((left, right) => `${left.file}:${left.kind}`.localeCompare(`${right.file}:${right.kind}`));
@@ -830,8 +897,9 @@ export async function checkNodePolicy(options: PolicyOptions): Promise<PolicyRes
   if (options.fixMode === 'write' && violations.some((violation) => violation.fixable)) {
     changedFiles = await applyFixes(violations, context);
     const rescannedFiles = await listFiles(rootDir, options.ignorePaths);
+    const rescannedHasDependencyMetadataLock = hasDependencyMetadataLock(rescannedFiles);
+    context.hasDependencyMetadataLock = rescannedHasDependencyMetadataLock;
     violations = (await Promise.all(rescannedFiles.map((file) => scanFile(file, context)))).flat();
-    const rescannedHasDependencyMetadataLock = rescannedFiles.some((file) => /^package-lock\.json$/iu.test(file.split('/').at(-1) ?? '') || /^pnpm-lock\.yaml$/iu.test(file.split('/').at(-1) ?? ''));
     if (!rescannedHasDependencyMetadataLock) {
       violations.push(...await scanInstalledPackageManifests(context));
     }
