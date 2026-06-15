@@ -15,7 +15,7 @@ function readFlag(argv: string[], name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const dependencyPolicy = (readFlag(process.argv, 'dependency-policy') ?? 'compatible') as DependencyPolicy;
+  const dependencyPolicy = (readFlag(process.argv, 'dependency-policy') ?? 'floor') as DependencyPolicy;
   const fixMode = (readFlag(process.argv, 'fix-mode') ?? 'none') as FixMode;
   if (dependencyPolicy !== 'compatible' && dependencyPolicy !== 'floor') {
     throw new Error('dependency-policy must be one of: compatible, floor');

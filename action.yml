@@ -14,9 +14,9 @@ inputs:
     required: false
     default: '24'
   dependency-policy:
-    description: Dependency engine policy. compatible fails packages that cannot run on Node 22+; floor also fails packages whose engine range permits lower Node versions.
+    description: Dependency engine policy. floor fails packages whose engine range permits lower Node versions; compatible only fails packages that cannot run on Node 22+.
     required: false
-    default: compatible
+    default: floor
   scan-dependencies:
     description: Whether to scan lockfile dependency engines.
     required: false

@@ -67,7 +67,7 @@ describe('checkNodePolicy', () => {
     expect(result.summary).toContain('npm pkg set engines.node=">=22"');
   });
 
-  test('fails dependency engine ranges that exclude Node 22 and ignores compatible lower floors by default', async () => {
+  test('floor dependency policy fails ranges that permit Node below 22', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
     await write(root, 'package-lock.json', `${JSON.stringify({
@@ -89,7 +89,7 @@ describe('checkNodePolicy', () => {
       rootDir: root,
       minimumNodeVersion: '22',
       preferredNodeVersion: '24',
-      dependencyPolicy: 'compatible',
+      dependencyPolicy: 'floor',
       scanDependencies: true,
       allowFloating: false,
       allowMissing: false,
@@ -102,6 +102,12 @@ describe('checkNodePolicy', () => {
       packageName: violation.packageName,
       current: violation.current
     }))).toEqual([
+      {
+        file: 'package-lock.json',
+        kind: 'dependency-engine',
+        packageName: 'compatible-floor',
+        current: '>=18'
+      },
       {
         file: 'package-lock.json',
         kind: 'dependency-engine',
@@ -334,6 +340,30 @@ describe('checkNodePolicy', () => {
     ]);
   });
 
+  test('fails unreadable installed package manifests instead of passing silently', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'yarn.lock', '# yarn lockfile v1\n');
+    await write(root, 'node_modules/broken/package.json', '{ "name": "broken", "engines": ');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations[0]).toMatchObject({
+      file: 'node_modules/broken/package.json',
+      kind: 'invalid-installed-package-json',
+      title: 'Invalid installed package manifest'
+    });
+  });
+
   test('ignores built-in generated directories at any workspace depth', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
@@ -520,6 +550,40 @@ describe('checkNodePolicy', () => {
       kind: 'docker-node',
       current: '20-alpine'
     });
+  });
+
+  test('scans registry-qualified official Node Docker images', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'Dockerfile', 'FROM docker.io/library/node:20\nFROM library/node:20-alpine\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations.map((violation) => ({
+      file: violation.file,
+      kind: violation.kind,
+      current: violation.current
+    }))).toEqual([
+      {
+        file: 'Dockerfile',
+        kind: 'docker-node',
+        current: '20'
+      },
+      {
+        file: 'Dockerfile',
+        kind: 'docker-node',
+        current: '20-alpine'
+      }
+    ]);
   });
 
   test('accepts setup-node version files that setup-node can parse', async () => {

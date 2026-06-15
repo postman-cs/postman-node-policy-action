@@ -1,8 +1,8 @@
 # Postman Node Runtime Policy Action
 
 Enforces Node.js 22+ declarations across GitHub repositories and fails on
-dependency engine ranges that are incompatible with Node 22 or newer. The action
-is designed to be called from an organization ruleset required workflow so the
+dependency engine ranges that permit Node versions lower than 22. The action is
+designed to be called from an organization ruleset required workflow so the
 policy cannot be removed by individual repositories.
 
 ## Required Workflow
@@ -23,7 +23,7 @@ The workflow checks out the pull request and runs:
   with:
     minimum-node-version: '22'
     preferred-node-version: '24'
-    dependency-policy: compatible
+    dependency-policy: floor
     scan-dependencies: 'true'
 ```
 
@@ -38,10 +38,10 @@ The workflow checks out the pull request and runs:
 - npm `package-lock.json`, pnpm lockfile, and installed `node_modules`
   dependency `engines.node` metadata
 
-The default dependency policy is `compatible`: a dependency fails when its engine
-range cannot run on Node 22 or newer. Set `dependency-policy: floor` for the
-stricter mode that also fails dependencies whose declared engine floor permits
-Node versions lower than 22.
+The default dependency policy is `floor`: a dependency fails when its engine
+range permits Node versions lower than 22. Set `dependency-policy: compatible`
+only for the looser mode that fails packages that cannot run on Node 22 or
+newer.
 
 Yarn lockfiles do not include dependency engine metadata. For Yarn repositories,
 run a frozen Yarn install before this action so installed package manifests are
@@ -54,7 +54,7 @@ transitive dependency enforcement.
 | --- | --- | --- |
 | `minimum-node-version` | `22` | Minimum allowed Node.js version or major. |
 | `preferred-node-version` | `24` | Preferred Node.js major used by safe fixes. |
-| `dependency-policy` | `compatible` | `compatible` or `floor`. |
+| `dependency-policy` | `floor` | `floor` or `compatible`. |
 | `scan-dependencies` | `true` | Scan lockfile dependency engine metadata. |
 | `allow-floating` | `false` | Allow `node`, `latest`, `current`, or `lts/*`. |
 | `allow-missing` | `false` | Allow `package.json` without `engines.node`. |
@@ -82,7 +82,7 @@ repository:
 node dist/cli.cjs --root . \
   --minimum-node-version 22 \
   --preferred-node-version 24 \
-  --dependency-policy compatible
+  --dependency-policy floor
 ```
 
 Use `--fix-mode write` only in a remediation branch where another step commits

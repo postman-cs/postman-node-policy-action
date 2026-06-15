@@ -534,7 +534,7 @@ function scanDockerfile(file: string, contents: string, context: ScanContext): P
   const violations: PolicyViolation[] = [];
   const lines = contents.split(/\r?\n/u);
   for (const [index, line] of lines.entries()) {
-    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node(?::([^\s@]+))?(?=[\s@]|$)/iu.exec(line);
+    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?(?:(?:docker\.io|index\.docker\.io)\/)?(?:library\/)?node(?::([^\s@]+))?(?=[\s@]|$)/iu.exec(line);
     if (!match) continue;
     const value = match[1] ?? 'latest';
     if (isFloatingNodeValue(value)) {
@@ -774,6 +774,12 @@ async function scanInstalledPackageManifests(context: ScanContext, packageDirs: 
     try {
       parsed = JSON.parse(contents) as MutableRecord;
     } catch {
+      violations.push(invalidStructuredFileViolation(
+        file,
+        'invalid-installed-package-json',
+        'Invalid installed package manifest',
+        'JSON'
+      ));
       continue;
     }
     const range = asString(asRecord(parsed.engines)?.node);
@@ -992,7 +998,7 @@ export interface ActionInputReader {
 }
 
 export function readPolicyOptionsFromAction(input: ActionInputReader, rootDir = process.cwd()): PolicyOptions {
-  const dependencyPolicy = input.getInput('dependency-policy') || 'compatible';
+  const dependencyPolicy = input.getInput('dependency-policy') || 'floor';
   if (dependencyPolicy !== 'compatible' && dependencyPolicy !== 'floor') {
     throw new Error('dependency-policy must be one of: compatible, floor');
   }

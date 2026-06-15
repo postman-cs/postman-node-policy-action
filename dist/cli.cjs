@@ -9785,7 +9785,7 @@ function scanDockerfile(file, contents, context) {
   const violations = [];
   const lines = contents.split(/\r?\n/u);
   for (const [index, line] of lines.entries()) {
-    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node(?::([^\s@]+))?(?=[\s@]|$)/iu.exec(line);
+    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?(?:(?:docker\.io|index\.docker\.io)\/)?(?:library\/)?node(?::([^\s@]+))?(?=[\s@]|$)/iu.exec(line);
     if (!match) continue;
     const value = match[1] ?? "latest";
     if (isFloatingNodeValue(value)) {
@@ -10009,6 +10009,12 @@ async function scanInstalledPackageManifests(context, packageDirs) {
     try {
       parsed = JSON.parse(contents);
     } catch {
+      violations.push(invalidStructuredFileViolation(
+        file,
+        "invalid-installed-package-json",
+        "Invalid installed package manifest",
+        "JSON"
+      ));
       continue;
     }
     const range = asString(asRecord(parsed.engines)?.node);
@@ -10217,7 +10223,7 @@ function readFlag(argv, name) {
   return void 0;
 }
 async function main() {
-  const dependencyPolicy = readFlag(process.argv, "dependency-policy") ?? "compatible";
+  const dependencyPolicy = readFlag(process.argv, "dependency-policy") ?? "floor";
   const fixMode = readFlag(process.argv, "fix-mode") ?? "none";
   if (dependencyPolicy !== "compatible" && dependencyPolicy !== "floor") {
     throw new Error("dependency-policy must be one of: compatible, floor");

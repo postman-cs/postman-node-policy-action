@@ -24,7 +24,7 @@ describe('required workflow', () => {
         with: {
           'minimum-node-version': '22',
           'preferred-node-version': '24',
-          'dependency-policy': 'compatible',
+          'dependency-policy': 'floor',
           'scan-dependencies': 'true'
         }
       }

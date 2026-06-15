@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { parse } from 'yaml';
 import { describe, expect, test } from 'vitest';
 
+import { readPolicyOptionsFromAction } from '../src/index.js';
+
 const repoRoot = resolve(__dirname, '..');
 
 describe('action metadata', () => {
@@ -32,5 +34,12 @@ describe('action metadata', () => {
       'changed-files-json',
       'summary-json'
     ]);
+    expect(action.inputs['dependency-policy'].default).toBe('floor');
+  });
+
+  test('defaults action dependency policy to floor when input is omitted', () => {
+    const options = readPolicyOptionsFromAction({ getInput: () => '' }, repoRoot);
+
+    expect(options.dependencyPolicy).toBe('floor');
   });
 });
