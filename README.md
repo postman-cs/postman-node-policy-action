@@ -16,9 +16,33 @@ workflow for a `postman-cs` repository ruleset:
 4. Start in evaluate mode, then switch to active after the first audit pass.
 5. Pair the ruleset with pull-request requirements or direct-push restrictions.
 
-The workflow checks out the pull request and runs:
+The workflow checks out the pull request, prepares Yarn dependency metadata when
+needed, and runs:
 
 ```yaml
+- uses: actions/setup-node@v6
+  with:
+    node-version: '24'
+- name: Install Yarn dependency metadata
+  shell: bash
+  run: |
+    set -euo pipefail
+    mapfile -t yarn_locks < <(find . -name yarn.lock -not -path '*/node_modules/*')
+    if [ "${#yarn_locks[@]}" -eq 0 ]; then
+      exit 0
+    fi
+    corepack enable
+    for lockfile in "${yarn_locks[@]}"; do
+      dir="$(dirname "$lockfile")"
+      (
+        cd "$dir"
+        if yarn --version | grep -q '^1\.'; then
+          yarn install --frozen-lockfile --ignore-scripts
+        else
+          yarn install --immutable --mode=skip-build
+        fi
+      )
+    done
 - uses: postman-cs/postman-node-policy-action@v1
   with:
     minimum-node-version: '22'
@@ -43,10 +67,11 @@ range permits Node versions lower than 22. Set `dependency-policy: compatible`
 only for the looser mode that fails packages that cannot run on Node 22 or
 newer.
 
-Yarn lockfiles do not include dependency engine metadata. For Yarn repositories,
-run a frozen Yarn install before this action so installed package manifests are
-available to scan; otherwise the action fails instead of silently skipping
-transitive dependency enforcement.
+Yarn lockfiles do not include dependency engine metadata. The required workflow
+runs a frozen Yarn install before this action so installed package manifests are
+available to scan. If you call this action from a custom workflow, keep that
+preparation step or the action fails instead of silently skipping transitive
+dependency enforcement.
 
 ## Inputs
 

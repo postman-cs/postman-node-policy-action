@@ -30586,7 +30586,19 @@ function scanPackageJson(file, contents, context) {
 }
 function scanNodeVersionFile(file, contents, context) {
   const value = contents.split(/\s+/u).find(Boolean) ?? "";
-  if (!value) return [];
+  if (!value) {
+    return [makeViolation({
+      file,
+      line: 1,
+      kind: "node-version-file",
+      title: "Empty Node version file",
+      message: `${file} does not declare a Node version; set it to ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
+      current: "(empty)",
+      expected: context.preferredMajor,
+      fixable: true,
+      fix: `printf '${context.preferredMajor}\\n' > ${file}`
+    })];
+  }
   if (isFloatingNodeValue(value)) {
     if (context.options.allowFloating) return [];
     return [makeViolation({
@@ -30624,6 +30636,21 @@ function scanToolVersions(file, contents, context) {
     const match = /^\s*nodejs\s+(\S+)/u.exec(line);
     if (!match) continue;
     const value = match[1] ?? "";
+    if (isFloatingNodeValue(value)) {
+      if (context.options.allowFloating) continue;
+      violations.push(makeViolation({
+        file,
+        line: index + 1,
+        kind: "tool-versions",
+        title: "Floating Node version",
+        message: `${file} uses floating nodejs version ${value}; pin Node ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
+        current: value,
+        expected: context.preferredMajor,
+        fixable: false,
+        fix: `Set nodejs to ${context.preferredMajor}.`
+      }));
+      continue;
+    }
     const meetsMinimum = nodeVersionMeetsMinimum(value, context.minimumMajor);
     if (meetsMinimum === false || meetsMinimum === void 0) {
       violations.push(makeViolation({

@@ -442,6 +442,57 @@ describe('checkNodePolicy', () => {
     ]));
   });
 
+  test('fails empty Node version files instead of passing silently', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, '.nvmrc', '\n');
+    await write(root, 'config/node-version.txt', '   \n');
+    await write(root, '.github/workflows/ci.yml', [
+      'name: ci',
+      'on: [pull_request]',
+      'jobs:',
+      '  test:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: .nvmrc',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: config/node-version.txt',
+      ''
+    ].join('\n'));
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.violations.map((violation) => ({
+      file: violation.file,
+      kind: violation.kind,
+      current: violation.current
+    }))).toEqual(expect.arrayContaining([
+      {
+        file: '.nvmrc',
+        kind: 'node-version-file',
+        current: '(empty)'
+      },
+      {
+        file: 'config/node-version.txt',
+        kind: 'node-version-file',
+        current: '(empty)'
+      }
+    ]));
+  });
+
   test('fails unverifiable GitHub Action Node runtimes', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
@@ -534,6 +585,7 @@ describe('checkNodePolicy', () => {
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
     await write(root, '.nvmrc', 'node\n');
     await write(root, '.node-version', 'latest\n');
+    await write(root, '.tool-versions', 'nodejs lts/*\n');
     await write(root, '.github/workflows/ci.yml', [
       'name: ci',
       'on: [pull_request]',

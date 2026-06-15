@@ -17,17 +17,29 @@ describe('required workflow', () => {
     expect(workflow.permissions).toEqual({
       contents: 'read'
     });
-    expect(workflow.jobs['node-policy'].steps).toEqual([
-      { uses: 'actions/checkout@v6' },
-      {
-        uses: 'postman-cs/postman-node-policy-action@v1',
-        with: {
-          'minimum-node-version': '22',
-          'preferred-node-version': '24',
-          'dependency-policy': 'floor',
-          'scan-dependencies': 'true'
-        }
+    const steps = workflow.jobs['node-policy'].steps;
+    expect(steps[0]).toEqual({ uses: 'actions/checkout@v6' });
+    expect(steps[1]).toEqual({
+      uses: 'actions/setup-node@v6',
+      with: {
+        'node-version': '24'
       }
-    ]);
+    });
+    expect(steps[2]).toMatchObject({
+      name: 'Install Yarn dependency metadata',
+      shell: 'bash'
+    });
+    expect(steps[2].run).toContain('find . -name yarn.lock');
+    expect(steps[2].run).toContain('yarn install --immutable --mode=skip-build');
+    expect(steps[2].run).toContain('yarn install --frozen-lockfile --ignore-scripts');
+    expect(steps[3]).toEqual({
+      uses: 'postman-cs/postman-node-policy-action@v1',
+      with: {
+        'minimum-node-version': '22',
+        'preferred-node-version': '24',
+        'dependency-policy': 'floor',
+        'scan-dependencies': 'true'
+      }
+    });
   });
 });

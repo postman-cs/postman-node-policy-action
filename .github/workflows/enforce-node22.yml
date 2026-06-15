@@ -12,6 +12,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install Yarn dependency metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t yarn_locks < <(find . -name yarn.lock -not -path '*/node_modules/*')
+          if [ "${#yarn_locks[@]}" -eq 0 ]; then
+            exit 0
+          fi
+          corepack enable
+          for lockfile in "${yarn_locks[@]}"; do
+            dir="$(dirname "$lockfile")"
+            (
+              cd "$dir"
+              if yarn --version | grep -q '^1\.'; then
+                yarn install --frozen-lockfile --ignore-scripts
+              else
+                yarn install --immutable --mode=skip-build
+              fi
+            )
+          done
       - uses: postman-cs/postman-node-policy-action@v1
         with:
           minimum-node-version: '22'
