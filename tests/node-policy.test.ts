@@ -266,6 +266,40 @@ describe('checkNodePolicy', () => {
     expect(result.violations).toEqual([]);
   });
 
+  test('fails nested yarn lockfiles when only another package has dependency metadata', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'package-lock.json', `${JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'app', version: '1.0.0' },
+        'node_modules/current': {
+          version: '1.0.0',
+          engines: { node: '>=22' }
+        }
+      }
+    }, null, 2)}\n`);
+    await write(root, 'packages/yarn-app/package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'packages/yarn-app/yarn.lock', '# yarn lockfile v1\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations[0]).toMatchObject({
+      file: 'packages/yarn-app/yarn.lock',
+      kind: 'unsupported-lockfile',
+      current: 'packages/yarn-app/yarn.lock'
+    });
+  });
+
   test('scans installed package manifests for yarn repos when node_modules is present', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
@@ -378,6 +412,30 @@ describe('checkNodePolicy', () => {
     ]));
   });
 
+  test('fails unverifiable GitHub Action Node runtimes', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'action.yml', 'runs:\n  using: node\n  main: dist/index.cjs\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations[0]).toMatchObject({
+      file: 'action.yml',
+      kind: 'action-runtime',
+      current: 'node',
+      title: 'GitHub Action runtime is not a pinned Node runtime'
+    });
+  });
+
   test('fails floating Docker Node base images', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
@@ -419,6 +477,84 @@ describe('checkNodePolicy', () => {
         title: 'Docker image uses an unverifiable Node version'
       }
     ]);
+  });
+
+  test('allows floating Docker Node base images when configured', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'Dockerfile', 'FROM node\nFROM node:latest\nFROM node:current\nFROM node:lts/*\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: true,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('passed');
+    expect(result.violations).toEqual([]);
+  });
+
+  test('scans Dockerfile variants', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'Dockerfile.dev', 'FROM node:20-alpine\n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations[0]).toMatchObject({
+      file: 'Dockerfile.dev',
+      kind: 'docker-node',
+      current: '20-alpine'
+    });
+  });
+
+  test('accepts setup-node version files that setup-node can parse', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, '.tool-versions', 'nodejs 24.1.0\n');
+    await write(root, '.github/workflows/ci.yml', [
+      'name: ci',
+      'on: [pull_request]',
+      'jobs:',
+      '  test:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: package.json',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: .tool-versions',
+      ''
+    ].join('\n'));
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('passed');
+    expect(result.violations).toEqual([]);
   });
 
   test('writes safe fixes for first-party Node declarations', async () => {

@@ -30461,8 +30461,33 @@ function invalidStructuredFileViolation(file, kind, title, format) {
 function hasDefaultIgnoredSegment(relPath) {
   return relPath.split("/").some((segment) => DEFAULT_IGNORES.has(segment));
 }
-function hasDependencyMetadataLock(files) {
-  return files.some((file) => /^package-lock\.json$/iu.test(file.split("/").at(-1) ?? "") || /^pnpm-lock\.yaml$/iu.test(file.split("/").at(-1) ?? ""));
+function relDir(file) {
+  return (0, import_node_path.dirname)(file) === "." ? "." : (0, import_node_path.dirname)(file);
+}
+function dependencyMetadataLockDirs(files) {
+  const dirs = /* @__PURE__ */ new Set();
+  for (const file of files) {
+    const basename3 = file.split("/").at(-1) ?? "";
+    if (/^package-lock\.json$/iu.test(basename3) || /^pnpm-lock\.yaml$/iu.test(basename3)) {
+      dirs.add(relDir(file));
+    }
+  }
+  return dirs;
+}
+function installedPackageDirsToScan(files, metadataLockDirs) {
+  const dirs = /* @__PURE__ */ new Set();
+  if (!metadataLockDirs.has(".")) {
+    dirs.add(".");
+  }
+  for (const file of files) {
+    if ((file.split("/").at(-1) ?? "") === "yarn.lock") {
+      const dir = relDir(file);
+      if (!metadataLockDirs.has(dir)) {
+        dirs.add(dir);
+      }
+    }
+  }
+  return [...dirs].sort();
 }
 async function listFiles(rootDir, ignorePaths = []) {
   const files = [];
@@ -30627,6 +30652,19 @@ function scanActionMetadata(file, contents, context) {
   const using = asString(runs?.using);
   if (!using) return violations;
   const meetsMinimum = nodeRuntimeMeetsMinimum(using, context.minimumMajor);
+  if (meetsMinimum === void 0 && /^node/iu.test(using.trim())) {
+    violations.push(makeViolation({
+      file,
+      line: lineFor(contents, "using:"),
+      kind: "action-runtime",
+      title: "GitHub Action runtime is not a pinned Node runtime",
+      message: `${file} uses ${using}; GitHub JavaScript actions must use node${context.preferredMajor}.`,
+      current: using,
+      expected: `node${context.preferredMajor}`,
+      fixable: true,
+      fix: `Set runs.using to node${context.preferredMajor}.`
+    }));
+  }
   if (meetsMinimum === false) {
     violations.push(makeViolation({
       file,
@@ -30714,7 +30752,7 @@ async function scanWorkflow(file, contents, context) {
         const versionBasename = versionFile.split("/").at(-1) ?? versionFile;
         try {
           const versionContents = await readText(context.rootDir, versionFile);
-          if (versionBasename !== ".nvmrc" && versionBasename !== ".node-version") {
+          if (![".nvmrc", ".node-version", ".tool-versions", "package.json"].includes(versionBasename)) {
             violations.push(...scanNodeVersionFile(versionFile, versionContents, context));
           }
         } catch {
@@ -30742,18 +30780,20 @@ function scanDockerfile(file, contents, context) {
     const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node(?::([^\s@]+))?(?=[\s@]|$)/iu.exec(line);
     if (!match) continue;
     const value = match[1] ?? "latest";
-    if (isFloatingNodeValue(value) && !context.options.allowFloating) {
-      violations.push(makeViolation({
-        file,
-        line: index + 1,
-        kind: "docker-node",
-        title: "Docker image uses a floating Node version",
-        message: `${file} uses node:${value}; pin Node ${context.preferredMajor} or another version ${context.minimumEngineRange} or newer.`,
-        current: value,
-        expected: context.preferredMajor,
-        fixable: false,
-        fix: `Use a node:${context.preferredMajor} base image.`
-      }));
+    if (isFloatingNodeValue(value)) {
+      if (!context.options.allowFloating) {
+        violations.push(makeViolation({
+          file,
+          line: index + 1,
+          kind: "docker-node",
+          title: "Docker image uses a floating Node version",
+          message: `${file} uses node:${value}; pin Node ${context.preferredMajor} or another version ${context.minimumEngineRange} or newer.`,
+          current: value,
+          expected: context.preferredMajor,
+          fixable: false,
+          fix: `Use a node:${context.preferredMajor} base image.`
+        }));
+      }
       continue;
     }
     const meetsMinimum = nodeVersionMeetsMinimum(value, context.minimumMajor);
@@ -30876,15 +30916,17 @@ function scanPnpmLock(file, contents, context) {
   }
   return violations;
 }
-async function hasInstalledPackages(rootDir) {
+async function hasInstalledPackages(rootDir, packageDir = ".") {
   try {
-    return (await (0, import_promises.stat)((0, import_node_path.join)(rootDir, "node_modules"))).isDirectory();
+    const baseDir = packageDir === "." ? rootDir : toAbsolute(rootDir, packageDir);
+    return (await (0, import_promises.stat)((0, import_node_path.join)(baseDir, "node_modules"))).isDirectory();
   } catch {
     return false;
   }
 }
 async function scanYarnLock(file, context) {
-  if (!context.options.scanDependencies || context.hasDependencyMetadataLock || await hasInstalledPackages(context.rootDir)) return [];
+  const packageDir = relDir(file);
+  if (!context.options.scanDependencies || context.dependencyMetadataLockDirs.has(packageDir) || await hasInstalledPackages(context.rootDir, packageDir)) return [];
   return [makeViolation({
     file,
     line: 1,
@@ -30904,13 +30946,13 @@ async function packageManifestExists(packageDir) {
     return false;
   }
 }
-async function collectInstalledPackageManifests(rootDir) {
+async function collectInstalledPackageManifests(rootDir, packageDir = ".") {
   const manifests = [];
-  async function collectPackage(packageDir) {
-    if (await packageManifestExists(packageDir)) {
-      manifests.push(normalizeRelPath(rootDir, (0, import_node_path.join)(packageDir, "package.json")));
+  async function collectPackage(packageDir2) {
+    if (await packageManifestExists(packageDir2)) {
+      manifests.push(normalizeRelPath(rootDir, (0, import_node_path.join)(packageDir2, "package.json")));
     }
-    const nestedNodeModules = (0, import_node_path.join)(packageDir, "node_modules");
+    const nestedNodeModules = (0, import_node_path.join)(packageDir2, "node_modules");
     try {
       if ((await (0, import_promises.stat)(nestedNodeModules)).isDirectory()) {
         await collectNodeModules(nestedNodeModules);
@@ -30940,13 +30982,19 @@ async function collectInstalledPackageManifests(rootDir) {
       await collectPackage(fullPath);
     }
   }
-  await collectNodeModules((0, import_node_path.join)(rootDir, "node_modules"));
+  const baseDir = packageDir === "." ? rootDir : toAbsolute(rootDir, packageDir);
+  await collectNodeModules((0, import_node_path.join)(baseDir, "node_modules"));
   return manifests.sort();
 }
-async function scanInstalledPackageManifests(context) {
+async function scanInstalledPackageManifests(context, packageDirs) {
   if (!context.options.scanDependencies) return [];
   const violations = [];
-  const manifests = await collectInstalledPackageManifests(context.rootDir);
+  const manifests = /* @__PURE__ */ new Set();
+  for (const packageDir of packageDirs) {
+    for (const manifest of await collectInstalledPackageManifests(context.rootDir, packageDir)) {
+      manifests.add(manifest);
+    }
+  }
   for (const file of manifests) {
     const contents = await readText(context.rootDir, file);
     let parsed;
@@ -30984,7 +31032,7 @@ async function scanFile(file, context) {
   if (/^pnpm-lock\.yaml$/iu.test(basename3)) return scanPnpmLock(file, contents, context);
   if (/^yarn\.lock$/iu.test(basename3)) return scanYarnLock(file, context);
   if (/\.github\/workflows\/[^/]+\.ya?ml$/iu.test(file)) return scanWorkflow(file, contents, context);
-  if (/Dockerfile$/u.test(basename3) || basename3 === "Containerfile") return scanDockerfile(file, contents, context);
+  if (/^(?:Dockerfile|Containerfile)(?:[.-].*)?$/u.test(basename3)) return scanDockerfile(file, contents, context);
   return [];
 }
 async function applyFixes(violations, context) {
@@ -31021,7 +31069,7 @@ async function applyFixes(violations, context) {
       continue;
     }
     if (violation.kind === "action-runtime") {
-      const updated = contents.replace(/(\busing:\s*)(['"]?)node\d+(\2)/iu, `$1$2node${context.preferredMajor}$3`);
+      const updated = contents.replace(/(\busing:\s*)(['"]?)node(?:\d+)?(\2)/iu, `$1$2node${context.preferredMajor}$3`);
       if (updated !== contents) {
         await (0, import_promises.writeFile)(fullPath, updated);
         changed.add(violation.file);
@@ -31097,7 +31145,7 @@ async function checkNodePolicy(options) {
   }
   const minimum = normalizeMinimumVersion(options.minimumNodeVersion);
   const files = await listFiles(rootDir, options.ignorePaths);
-  const initialHasDependencyMetadataLock = hasDependencyMetadataLock(files);
+  const initialDependencyMetadataLockDirs = dependencyMetadataLockDirs(files);
   const context = {
     rootDir,
     minimum,
@@ -31105,25 +31153,21 @@ async function checkNodePolicy(options) {
     minimumRange: `>=${minimum}`,
     minimumEngineRange: minimumEngineRange(options.minimumNodeVersion),
     preferredMajor: String(majorOf(options.preferredNodeVersion)),
-    hasDependencyMetadataLock: initialHasDependencyMetadataLock,
+    dependencyMetadataLockDirs: initialDependencyMetadataLockDirs,
     options
   };
   let violations = (await Promise.all(files.map((file) => scanFile(file, context)))).flat();
-  if (!initialHasDependencyMetadataLock) {
-    violations.push(...await scanInstalledPackageManifests(context));
-  }
+  violations.push(...await scanInstalledPackageManifests(context, installedPackageDirsToScan(files, initialDependencyMetadataLockDirs)));
   violations = violations.sort((left, right) => `${left.file}:${left.kind}`.localeCompare(`${right.file}:${right.kind}`));
   const initialViolationCount = violations.length;
   let changedFiles = [];
   if (options.fixMode === "write" && violations.some((violation) => violation.fixable)) {
     changedFiles = await applyFixes(violations, context);
     const rescannedFiles = await listFiles(rootDir, options.ignorePaths);
-    const rescannedHasDependencyMetadataLock = hasDependencyMetadataLock(rescannedFiles);
-    context.hasDependencyMetadataLock = rescannedHasDependencyMetadataLock;
+    const rescannedDependencyMetadataLockDirs = dependencyMetadataLockDirs(rescannedFiles);
+    context.dependencyMetadataLockDirs = rescannedDependencyMetadataLockDirs;
     violations = (await Promise.all(rescannedFiles.map((file) => scanFile(file, context)))).flat();
-    if (!rescannedHasDependencyMetadataLock) {
-      violations.push(...await scanInstalledPackageManifests(context));
-    }
+    violations.push(...await scanInstalledPackageManifests(context, installedPackageDirsToScan(rescannedFiles, rescannedDependencyMetadataLockDirs)));
     violations = violations.sort((left, right) => `${left.file}:${left.kind}`.localeCompare(`${right.file}:${right.kind}`));
   }
   const resultWithoutSummary = {

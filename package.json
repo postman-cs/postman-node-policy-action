@@ -1,6 +1,6 @@
 {
   "name": "@postman-cse/node-policy-action",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Enforce Postman CS Node.js runtime policy in GitHub repositories.",
   "type": "module",
   "main": "dist/index.cjs",
