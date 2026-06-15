@@ -10213,7 +10213,11 @@ function suggestedCommandsForViolations(violations, context) {
     } else if (violation.kind === "node-version-file") {
       commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.file);
     } else if (violation.kind === "setup-node-version-file") {
-      commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.current);
+      if (violation.current.endsWith(".tool-versions")) {
+        commands.add("printf 'nodejs " + context.preferredMajor + "\\n' >> " + violation.current);
+      } else {
+        commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.current);
+      }
     } else if (violation.kind === "unsupported-lockfile") {
       commands.add("yarn install --immutable || yarn install --frozen-lockfile");
     } else if (violation.kind === "unsupported-package-lock") {

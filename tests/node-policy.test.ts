@@ -563,6 +563,8 @@ describe('checkNodePolicy', () => {
       current: '.tool-versions'
     });
     expect(result.summary).toContain('Add "nodejs 24" to .tool-versions');
+    expect(result.summary).toContain("printf 'nodejs 24\\n' >> .tool-versions");
+    expect(result.summary).not.toContain("printf '24\\n' > .tool-versions");
   });
 
   test('fails unverifiable GitHub Action Node runtimes', async () => {
