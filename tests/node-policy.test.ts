@@ -381,7 +381,7 @@ describe('checkNodePolicy', () => {
   test('fails floating Docker Node base images', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
-    await write(root, 'Dockerfile', 'FROM node:latest\nFROM node:bookworm AS build\n');
+    await write(root, 'Dockerfile', 'FROM node\nFROM node:latest\nFROM node:bookworm AS build\n');
 
     const result = await checkNodePolicy({
       rootDir: root,
@@ -400,6 +400,12 @@ describe('checkNodePolicy', () => {
       current: violation.current,
       title: violation.title
     }))).toEqual([
+      {
+        file: 'Dockerfile',
+        kind: 'docker-node',
+        current: 'latest',
+        title: 'Docker image uses a floating Node version'
+      },
       {
         file: 'Dockerfile',
         kind: 'docker-node',

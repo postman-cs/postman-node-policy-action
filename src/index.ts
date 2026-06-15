@@ -494,9 +494,9 @@ function scanDockerfile(file: string, contents: string, context: ScanContext): P
   const violations: PolicyViolation[] = [];
   const lines = contents.split(/\r?\n/u);
   for (const [index, line] of lines.entries()) {
-    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node:([^\s@]+)\b/iu.exec(line);
+    const match = /^\s*FROM\s+(?:--platform=\S+\s+)?node(?::([^\s@]+))?(?=[\s@]|$)/iu.exec(line);
     if (!match) continue;
-    const value = match[1] ?? '';
+    const value = match[1] ?? 'latest';
     if (isFloatingNodeValue(value) && !context.options.allowFloating) {
       violations.push(makeViolation({
         file,
