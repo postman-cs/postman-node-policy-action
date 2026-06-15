@@ -493,6 +493,78 @@ describe('checkNodePolicy', () => {
     ]));
   });
 
+  test('fails empty or malformed tool-versions Node declarations', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, '.tool-versions', '\n');
+    await write(root, 'packages/app/.tool-versions', 'nodejs   \n');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.violations.map((violation) => ({
+      file: violation.file,
+      kind: violation.kind,
+      current: violation.current
+    }))).toEqual(expect.arrayContaining([
+      {
+        file: '.tool-versions',
+        kind: 'tool-versions',
+        current: '(empty)'
+      },
+      {
+        file: 'packages/app/.tool-versions',
+        kind: 'tool-versions',
+        current: '(empty)'
+      }
+    ]));
+  });
+
+  test('fails setup-node tool-versions references without nodejs declarations', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, '.tool-versions', 'python 3.11.0\n');
+    await write(root, '.github/workflows/ci.yml', [
+      'name: ci',
+      'on: [pull_request]',
+      'jobs:',
+      '  test:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: .tool-versions',
+      ''
+    ].join('\n'));
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations[0]).toMatchObject({
+      file: '.github/workflows/ci.yml',
+      kind: 'setup-node-version-file',
+      current: '.tool-versions'
+    });
+    expect(result.summary).toContain('Add "nodejs 24" to .tool-versions');
+  });
+
   test('fails unverifiable GitHub Action Node runtimes', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);

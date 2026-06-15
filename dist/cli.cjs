@@ -9639,11 +9639,41 @@ function scanNodeVersionFile(file, contents, context) {
 }
 function scanToolVersions(file, contents, context) {
   const violations = [];
+  if (!contents.trim()) {
+    violations.push(makeViolation({
+      file,
+      line: 1,
+      kind: "tool-versions",
+      title: "Empty tool-versions file",
+      message: `${file} does not declare a nodejs version; add nodejs ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
+      current: "(empty)",
+      expected: context.preferredMajor,
+      fixable: false,
+      fix: `Add "nodejs ${context.preferredMajor}" to ${file}.`
+    }));
+    return violations;
+  }
   const lines = contents.split(/\r?\n/u);
   for (const [index, line] of lines.entries()) {
-    const match = /^\s*nodejs\s+(\S+)/u.exec(line);
+    const trimmed = line.replace(/\s+#.*$/u, "").trim();
+    if (!trimmed) continue;
+    const match = /^nodejs(?:\s+(\S+)(?:\s+.*)?)?$/u.exec(trimmed);
     if (!match) continue;
     const value = match[1] ?? "";
+    if (!value) {
+      violations.push(makeViolation({
+        file,
+        line: index + 1,
+        kind: "tool-versions",
+        title: "Empty tool-versions Node declaration",
+        message: `${file} declares nodejs without a version; set it to ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
+        current: "(empty)",
+        expected: context.preferredMajor,
+        fixable: false,
+        fix: `Set nodejs to ${context.preferredMajor}.`
+      }));
+      continue;
+    }
     if (isFloatingNodeValue(value)) {
       if (context.options.allowFloating) continue;
       violations.push(makeViolation({
@@ -9675,6 +9705,9 @@ function scanToolVersions(file, contents, context) {
     }
   }
   return violations;
+}
+function toolVersionsHasNodeDeclaration(contents) {
+  return contents.split(/\r?\n/u).some((line) => /^nodejs(?:\s|$)/u.test(line.replace(/\s+#.*$/u, "").trim()));
 }
 function scanActionMetadata(file, contents, context) {
   const violations = [];
@@ -9790,7 +9823,19 @@ async function scanWorkflow(file, contents, context) {
         const versionBasename = versionFile.split("/").at(-1) ?? versionFile;
         try {
           const versionContents = await readText(context.rootDir, versionFile);
-          if (![".nvmrc", ".node-version", ".tool-versions", "package.json"].includes(versionBasename)) {
+          if (versionBasename === ".tool-versions" && versionContents.trim() && !toolVersionsHasNodeDeclaration(versionContents)) {
+            violations.push(makeViolation({
+              file,
+              line: lineFor(contents, "node-version-file:"),
+              kind: "setup-node-version-file",
+              title: "setup-node version file lacks nodejs entry",
+              message: `${file} references ${versionFile}, but that file does not declare nodejs.`,
+              current: versionFile,
+              expected: context.preferredMajor,
+              fixable: false,
+              fix: `Add "nodejs ${context.preferredMajor}" to ${versionFile}.`
+            }));
+          } else if (![".nvmrc", ".node-version", ".tool-versions", "package.json"].includes(versionBasename)) {
             violations.push(...scanNodeVersionFile(versionFile, versionContents, context));
           }
         } catch {
