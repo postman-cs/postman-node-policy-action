@@ -242,6 +242,56 @@ describe('checkNodePolicy', () => {
     ]);
   });
 
+  test('ignores built-in generated directories at any workspace depth', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'packages/app/node_modules/legacy/package.json', `${JSON.stringify({
+      name: 'legacy',
+      version: '1.0.0'
+    }, null, 2)}\n`);
+    await write(root, 'packages/app/dist/package.json', `${JSON.stringify({
+      name: 'generated',
+      engines: { node: '<22' }
+    }, null, 2)}\n`);
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('passed');
+    expect(result.violations).toEqual([]);
+  });
+
+  test('fails unreadable package manifests instead of passing silently', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', '{ "name": "broken", "engines": ');
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.violations[0]).toMatchObject({
+      file: 'package.json',
+      kind: 'invalid-package-json',
+      title: 'Invalid package.json'
+    });
+  });
+
   test('writes safe fixes for first-party Node declarations', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ name: 'service', engines: { node: '>=20' } }, null, 2)}\n`);

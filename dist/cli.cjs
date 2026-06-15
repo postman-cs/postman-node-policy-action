@@ -9453,6 +9453,9 @@ function makeViolation(input) {
     ...input
   };
 }
+function hasDefaultIgnoredSegment(relPath) {
+  return relPath.split("/").some((segment) => DEFAULT_IGNORES.has(segment));
+}
 async function listFiles(rootDir, ignorePaths = []) {
   const files = [];
   const ignored = new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, "").replace(/\/$/u, "")));
@@ -9462,7 +9465,7 @@ async function listFiles(rootDir, ignorePaths = []) {
       const fullPath = (0, import_node_path.join)(dir, entry.name);
       const relPath = normalizeRelPath(rootDir, fullPath);
       const firstSegment = relPath.split("/")[0] ?? relPath;
-      if (DEFAULT_IGNORES.has(firstSegment) || ignored.has(relPath) || ignored.has(firstSegment)) {
+      if (hasDefaultIgnoredSegment(relPath) || ignored.has(relPath) || ignored.has(firstSegment)) {
         continue;
       }
       if ([...ignored].some((ignore) => relPath.startsWith(`${ignore}/`))) {
@@ -9487,7 +9490,17 @@ function scanPackageJson(file, contents, context) {
   try {
     parsed = JSON.parse(contents);
   } catch {
-    return violations;
+    return [makeViolation({
+      file,
+      line: 1,
+      kind: "invalid-package-json",
+      title: "Invalid package.json",
+      message: `${file} could not be parsed, so Node engine policy cannot be verified.`,
+      current: "invalid JSON",
+      expected: `valid package.json with engines.node ${context.minimumEngineRange} or newer`,
+      fixable: false,
+      fix: "Fix the package.json syntax, then rerun the policy check."
+    })];
   }
   const engines = asRecord(parsed.engines);
   const engineRange = asString(engines?.node);
