@@ -30481,6 +30481,11 @@ function packageEngineFixCommand(file, context) {
 function packageLockRefreshCommand(file) {
   return `${npmPrefixForPackageFile(file)} install --package-lock-only`;
 }
+function yarnMetadataInstallCommand(file) {
+  const command = "yarn install --immutable || yarn install --frozen-lockfile";
+  const packageDir = relDir(file);
+  return packageDir === "." ? command : `(cd ${packageDir} && (${command}))`;
+}
 function dependencyMetadataLockDirs(files) {
   const dirs = /* @__PURE__ */ new Set();
   for (const file of files) {
@@ -31248,7 +31253,7 @@ function suggestedCommandsForViolations(violations, context) {
         commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.current);
       }
     } else if (violation.kind === "unsupported-lockfile") {
-      commands.add("yarn install --immutable || yarn install --frozen-lockfile");
+      commands.add(yarnMetadataInstallCommand(violation.file));
     } else if (violation.kind === "unsupported-package-lock") {
       commands.add("npm install --package-lock-only");
     } else if (violation.kind === "tool-versions" && violation.current === "(missing)") {

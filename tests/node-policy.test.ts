@@ -304,6 +304,7 @@ describe('checkNodePolicy', () => {
       kind: 'unsupported-lockfile',
       current: 'packages/yarn-app/yarn.lock'
     });
+    expect(result.summary).toContain('(cd packages/yarn-app && (yarn install --immutable || yarn install --frozen-lockfile))');
   });
 
   test('scans installed package manifests for yarn repos when node_modules is present', async () => {
