@@ -1,5 +1,5 @@
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join, posix, relative, sep } from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
 import semver from 'semver';
@@ -198,8 +198,17 @@ function hasDefaultIgnoredSegment(relPath: string): boolean {
   return relPath.split('/').some((segment) => DEFAULT_IGNORES.has(segment));
 }
 
+function normalizeScanPath(entry: string): string {
+  const normalized = posix.normalize(entry.split(sep).join('/').replace(/^\/+/u, ''));
+  return normalized === '.' ? '' : normalized.replace(/\/$/u, '');
+}
+
+function isOutsideScanRoot(relPath: string): boolean {
+  return relPath === '..' || relPath.startsWith('../');
+}
+
 function normalizedIgnoredPaths(ignorePaths: string[] | undefined = []): Set<string> {
-  return new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, '').replace(/\/$/u, '')));
+  return new Set(ignorePaths.map(normalizeScanPath));
 }
 
 function isIgnoredByFileScan(relPath: string, ignored: Set<string>): boolean {
@@ -614,7 +623,21 @@ async function scanWorkflow(file: string, contents: string, context: ScanContext
       }
       const nodeVersionFile = asString(withBlock?.['node-version-file']);
       if (nodeVersionFile) {
-        const versionFile = nodeVersionFile.trim();
+        const versionFile = normalizeScanPath(nodeVersionFile.trim());
+        if (isOutsideScanRoot(versionFile)) {
+          violations.push(makeViolation({
+            file,
+            line: lineFor(contents, 'node-version-file:'),
+            kind: 'setup-node-version-file',
+            title: 'setup-node version file is outside the repository',
+            message: `${file} references ${versionFile}, but Node runtime policy only checks files inside the repository root.`,
+            current: versionFile,
+            expected: context.preferredMajor,
+            fixable: false,
+            fix: `Move the Node version file into the repository and reference it with a path like .nvmrc.`
+          }));
+          continue;
+        }
         const versionBasename = versionFile.split('/').at(-1) ?? versionFile;
         const standardVersionFile = ['.nvmrc', '.node-version', '.tool-versions', 'package.json'].includes(versionBasename);
         const referencedFileIsIgnored = isIgnoredByFileScan(versionFile, normalizedIgnoredPaths(context.options.ignorePaths));
@@ -1042,7 +1065,9 @@ function suggestedCommandsForViolations(violations: PolicyViolation[], context: 
     } else if (violation.kind === 'node-version-file') {
       commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.file);
     } else if (violation.kind === 'setup-node-version-file') {
-      if (violation.current.endsWith('.tool-versions')) {
+      if (isOutsideScanRoot(normalizeScanPath(violation.current))) {
+        commands.add('# ' + violation.fix);
+      } else if (violation.current.endsWith('.tool-versions')) {
         commands.add("printf 'nodejs " + context.preferredMajor + "\\n' >> " + violation.current);
       } else {
         commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.current);

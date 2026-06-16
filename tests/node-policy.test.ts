@@ -975,6 +975,115 @@ describe('checkNodePolicy', () => {
     expect(result.summary).toContain('npm --prefix dist pkg set engines.node=">=22"');
   });
 
+  test('normalizes setup-node standard node-version-file references under ignored paths', async () => {
+    const cases = [
+      { nodeVersionFile: './generated/.nvmrc', ignorePaths: ['generated'] },
+      { nodeVersionFile: '././generated/.nvmrc', ignorePaths: ['./generated/'] },
+      { nodeVersionFile: 'generated/../generated/.nvmrc', ignorePaths: ['generated'] }
+    ];
+
+    for (const { nodeVersionFile, ignorePaths } of cases) {
+      const root = await makeRepo();
+      await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+      await write(root, 'generated/.nvmrc', '20\n');
+      await write(root, '.github/workflows/ci.yml', [
+        'name: ci',
+        'on: [pull_request]',
+        'jobs:',
+        '  test:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        '      - uses: actions/setup-node@v6',
+        '        with:',
+        `          node-version-file: ${nodeVersionFile}`,
+        ''
+      ].join('\n'));
+
+      const result = await checkNodePolicy({
+        rootDir: root,
+        minimumNodeVersion: '22',
+        preferredNodeVersion: '24',
+        dependencyPolicy: 'compatible',
+        scanDependencies: true,
+        allowFloating: false,
+        allowMissing: false,
+        fixMode: 'none',
+        ignorePaths
+      });
+
+      expect(result.violations.map((violation) => ({
+        file: violation.file,
+        kind: violation.kind,
+        current: violation.current
+      }))).toEqual([
+        {
+          file: 'generated/.nvmrc',
+          kind: 'node-version-file',
+          current: '20'
+        }
+      ]);
+    }
+  });
+
+  test('rejects setup-node node-version-file references outside the repository root', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'node-policy-parent-'));
+    tempRoots.push(parent);
+    const root = join(parent, 'repo');
+    await write(parent, 'repo/package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(parent, 'external/.nvmrc', '20\n');
+    await write(parent, 'external/package.json', `${JSON.stringify({ engines: { node: '>=20' } }, null, 2)}\n`);
+    await write(parent, 'repo/.github/workflows/ci.yml', [
+      'name: ci',
+      'on: [pull_request]',
+      'jobs:',
+      '  test:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: ../external/.nvmrc',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: ../external/package.json',
+      ''
+    ].join('\n'));
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: false,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations.map((violation) => ({
+      file: violation.file,
+      kind: violation.kind,
+      title: violation.title,
+      current: violation.current
+    }))).toEqual([
+      {
+        file: '.github/workflows/ci.yml',
+        kind: 'setup-node-version-file',
+        title: 'setup-node version file is outside the repository',
+        current: '../external/.nvmrc'
+      },
+      {
+        file: '.github/workflows/ci.yml',
+        kind: 'setup-node-version-file',
+        title: 'setup-node version file is outside the repository',
+        current: '../external/package.json'
+      }
+    ]);
+    expect(result.summary).toContain('Move the Node version file into the repository');
+    expect(result.summary).toContain('# Move the Node version file into the repository and reference it with a path like .nvmrc.');
+    expect(result.summary).not.toContain("printf '24\\n' > ../external/.nvmrc");
+    expect(result.summary).not.toContain("printf '24\\n' > ../external/package.json");
+  });
+
   test('fails when setup-node references a missing standard node-version-file', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);

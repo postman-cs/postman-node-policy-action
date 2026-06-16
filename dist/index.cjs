@@ -30461,8 +30461,15 @@ function invalidStructuredFileViolation(file, kind, title, format) {
 function hasDefaultIgnoredSegment(relPath) {
   return relPath.split("/").some((segment) => DEFAULT_IGNORES.has(segment));
 }
+function normalizeScanPath(entry) {
+  const normalized = import_node_path.posix.normalize(entry.split(import_node_path.sep).join("/").replace(/^\/+/u, ""));
+  return normalized === "." ? "" : normalized.replace(/\/$/u, "");
+}
+function isOutsideScanRoot(relPath) {
+  return relPath === ".." || relPath.startsWith("../");
+}
 function normalizedIgnoredPaths(ignorePaths = []) {
-  return new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, "").replace(/\/$/u, "")));
+  return new Set(ignorePaths.map(normalizeScanPath));
 }
 function isIgnoredByFileScan(relPath, ignored) {
   const firstSegment = relPath.split("/")[0] ?? relPath;
@@ -30845,7 +30852,21 @@ async function scanWorkflow(file, contents, context) {
       }
       const nodeVersionFile = asString(withBlock?.["node-version-file"]);
       if (nodeVersionFile) {
-        const versionFile = nodeVersionFile.trim();
+        const versionFile = normalizeScanPath(nodeVersionFile.trim());
+        if (isOutsideScanRoot(versionFile)) {
+          violations.push(makeViolation({
+            file,
+            line: lineFor(contents, "node-version-file:"),
+            kind: "setup-node-version-file",
+            title: "setup-node version file is outside the repository",
+            message: `${file} references ${versionFile}, but Node runtime policy only checks files inside the repository root.`,
+            current: versionFile,
+            expected: context.preferredMajor,
+            fixable: false,
+            fix: `Move the Node version file into the repository and reference it with a path like .nvmrc.`
+          }));
+          continue;
+        }
         const versionBasename = versionFile.split("/").at(-1) ?? versionFile;
         const standardVersionFile = [".nvmrc", ".node-version", ".tool-versions", "package.json"].includes(versionBasename);
         const referencedFileIsIgnored = isIgnoredByFileScan(versionFile, normalizedIgnoredPaths(context.options.ignorePaths));
@@ -31247,7 +31268,9 @@ function suggestedCommandsForViolations(violations, context) {
     } else if (violation.kind === "node-version-file") {
       commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.file);
     } else if (violation.kind === "setup-node-version-file") {
-      if (violation.current.endsWith(".tool-versions")) {
+      if (isOutsideScanRoot(normalizeScanPath(violation.current))) {
+        commands.add("# " + violation.fix);
+      } else if (violation.current.endsWith(".tool-versions")) {
         commands.add("printf 'nodejs " + context.preferredMajor + "\\n' >> " + violation.current);
       } else {
         commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.current);
