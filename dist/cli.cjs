@@ -9575,8 +9575,9 @@ function scanPackageJson(file, contents, context) {
   const volta = asRecord(parsed.volta);
   const voltaNode = asString(volta?.node);
   if (voltaNode) {
-    const meetsMinimum = nodeVersionMeetsMinimum(voltaNode, context.minimumMajor);
-    if (meetsMinimum === false || meetsMinimum === void 0 && !context.options.allowFloating) {
+    const isAllowedFloating = isFloatingNodeValue(voltaNode) && context.options.allowFloating;
+    const meetsMinimum = isAllowedFloating ? true : nodeVersionMeetsMinimum(voltaNode, context.minimumMajor);
+    if (meetsMinimum === false || meetsMinimum === void 0) {
       violations.push(makeViolation({
         file,
         line: lineFor(contents, '"volta"'),
@@ -9654,11 +9655,13 @@ function scanToolVersions(file, contents, context) {
     return violations;
   }
   const lines = contents.split(/\r?\n/u);
+  let hasNodeDeclaration = false;
   for (const [index, line] of lines.entries()) {
     const trimmed = line.replace(/\s+#.*$/u, "").trim();
     if (!trimmed) continue;
     const match = /^nodejs(?:\s+(\S+)(?:\s+.*)?)?$/u.exec(trimmed);
     if (!match) continue;
+    hasNodeDeclaration = true;
     const value = match[1] ?? "";
     if (!value) {
       violations.push(makeViolation({
@@ -9703,6 +9706,19 @@ function scanToolVersions(file, contents, context) {
         fix: `Set nodejs to ${context.preferredMajor}.`
       }));
     }
+  }
+  if (!hasNodeDeclaration) {
+    violations.push(makeViolation({
+      file,
+      line: 1,
+      kind: "tool-versions",
+      title: "Missing tool-versions Node declaration",
+      message: `${file} does not declare a nodejs version; add nodejs ${context.preferredMajor} or another version >=${context.minimumMajor}.`,
+      current: "(missing)",
+      expected: context.preferredMajor,
+      fixable: false,
+      fix: `Add "nodejs ${context.preferredMajor}" to ${file}.`
+    }));
   }
   return violations;
 }
@@ -10222,6 +10238,8 @@ function suggestedCommandsForViolations(violations, context) {
       commands.add("yarn install --immutable || yarn install --frozen-lockfile");
     } else if (violation.kind === "unsupported-package-lock") {
       commands.add("npm install --package-lock-only");
+    } else if (violation.kind === "tool-versions" && violation.current === "(missing)") {
+      commands.add("printf 'nodejs " + context.preferredMajor + "\\n' >> " + violation.file);
     } else if (violation.kind === "dependency-engine") {
       commands.add("# " + violation.fix);
     } else if (violation.fix) {

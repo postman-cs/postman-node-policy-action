@@ -498,6 +498,7 @@ describe('checkNodePolicy', () => {
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
     await write(root, '.tool-versions', '\n');
     await write(root, 'packages/app/.tool-versions', 'nodejs   \n');
+    await write(root, 'packages/python-only/.tool-versions', 'python 3.11.0\n');
 
     const result = await checkNodePolicy({
       rootDir: root,
@@ -525,8 +526,42 @@ describe('checkNodePolicy', () => {
         file: 'packages/app/.tool-versions',
         kind: 'tool-versions',
         current: '(empty)'
+      },
+      {
+        file: 'packages/python-only/.tool-versions',
+        kind: 'tool-versions',
+        current: '(missing)'
       }
     ]));
+    expect(result.summary).toContain("printf 'nodejs 24\\n' >> packages/python-only/.tool-versions");
+  });
+
+  test('fails unparsable Volta Node versions even when floating declarations are allowed', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({
+      engines: { node: '>=22' },
+      volta: { node: 'definitely-not-node' }
+    }, null, 2)}\n`);
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: true,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.violations).toEqual([
+      expect.objectContaining({
+        file: 'package.json',
+        kind: 'volta-node',
+        current: 'definitely-not-node'
+      })
+    ]);
   });
 
   test('fails setup-node tool-versions references without nodejs declarations', async () => {
