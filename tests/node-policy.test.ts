@@ -914,6 +914,66 @@ describe('checkNodePolicy', () => {
     ]);
   });
 
+  test('checks setup-node standard node-version-file references inside ignored paths', async () => {
+    const root = await makeRepo();
+    await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);
+    await write(root, 'dist/.nvmrc', '20\n');
+    await write(root, 'dist/.tool-versions', 'nodejs 20\n');
+    await write(root, 'dist/package.json', `${JSON.stringify({ engines: { node: '>=20' } }, null, 2)}\n`);
+    await write(root, '.github/workflows/ci.yml', [
+      'name: ci',
+      'on: [pull_request]',
+      'jobs:',
+      '  test:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: dist/.nvmrc',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: dist/.tool-versions',
+      '      - uses: actions/setup-node@v6',
+      '        with:',
+      '          node-version-file: dist/package.json',
+      ''
+    ].join('\n'));
+
+    const result = await checkNodePolicy({
+      rootDir: root,
+      minimumNodeVersion: '22',
+      preferredNodeVersion: '24',
+      dependencyPolicy: 'compatible',
+      scanDependencies: true,
+      allowFloating: false,
+      allowMissing: false,
+      fixMode: 'none'
+    });
+
+    expect(result.violations.map((violation) => ({
+      file: violation.file,
+      kind: violation.kind,
+      current: violation.current
+    }))).toEqual([
+      {
+        file: 'dist/.nvmrc',
+        kind: 'node-version-file',
+        current: '20'
+      },
+      {
+        file: 'dist/.tool-versions',
+        kind: 'tool-versions',
+        current: '20'
+      },
+      {
+        file: 'dist/package.json',
+        kind: 'package-engines',
+        current: '>=20'
+      }
+    ]);
+    expect(result.summary).toContain('npm --prefix dist pkg set engines.node=">=22"');
+  });
+
   test('fails when setup-node references a missing standard node-version-file', async () => {
     const root = await makeRepo();
     await write(root, 'package.json', `${JSON.stringify({ engines: { node: '>=22' } }, null, 2)}\n`);

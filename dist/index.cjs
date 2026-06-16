@@ -30461,8 +30461,25 @@ function invalidStructuredFileViolation(file, kind, title, format) {
 function hasDefaultIgnoredSegment(relPath) {
   return relPath.split("/").some((segment) => DEFAULT_IGNORES.has(segment));
 }
+function normalizedIgnoredPaths(ignorePaths = []) {
+  return new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, "").replace(/\/$/u, "")));
+}
+function isIgnoredByFileScan(relPath, ignored) {
+  const firstSegment = relPath.split("/")[0] ?? relPath;
+  return hasDefaultIgnoredSegment(relPath) || ignored.has(relPath) || ignored.has(firstSegment) || [...ignored].some((ignore) => relPath.startsWith(`${ignore}/`));
+}
 function relDir(file) {
   return (0, import_node_path.dirname)(file) === "." ? "." : (0, import_node_path.dirname)(file);
+}
+function npmPrefixForPackageFile(file) {
+  const packageDir = relDir(file);
+  return packageDir === "." ? "npm" : `npm --prefix ${packageDir}`;
+}
+function packageEngineFixCommand(file, context) {
+  return `${npmPrefixForPackageFile(file)} pkg set engines.node="${context.minimumEngineRange}"`;
+}
+function packageLockRefreshCommand(file) {
+  return `${npmPrefixForPackageFile(file)} install --package-lock-only`;
 }
 function dependencyMetadataLockDirs(files) {
   const dirs = /* @__PURE__ */ new Set();
@@ -30491,17 +30508,13 @@ function installedPackageDirsToScan(files, metadataLockDirs) {
 }
 async function listFiles(rootDir, ignorePaths = []) {
   const files = [];
-  const ignored = new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, "").replace(/\/$/u, "")));
+  const ignored = normalizedIgnoredPaths(ignorePaths);
   async function walk(dir) {
     const entries = await (0, import_promises.readdir)(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = (0, import_node_path.join)(dir, entry.name);
       const relPath = normalizeRelPath(rootDir, fullPath);
-      const firstSegment = relPath.split("/")[0] ?? relPath;
-      if (hasDefaultIgnoredSegment(relPath) || ignored.has(relPath) || ignored.has(firstSegment)) {
-        continue;
-      }
-      if ([...ignored].some((ignore) => relPath.startsWith(`${ignore}/`))) {
+      if (isIgnoredByFileScan(relPath, ignored)) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -30548,7 +30561,7 @@ function scanPackageJson(file, contents, context) {
         current: "(missing)",
         expected: context.minimumEngineRange,
         fixable: true,
-        fix: `npm pkg set engines.node="${context.minimumEngineRange}"`
+        fix: packageEngineFixCommand(file, context)
       }));
     }
   } else if (hasLowerNodeRange(engineRange, context)) {
@@ -30561,7 +30574,7 @@ function scanPackageJson(file, contents, context) {
       current: engineRange,
       expected: context.minimumEngineRange,
       fixable: true,
-      fix: `npm pkg set engines.node="${context.minimumEngineRange}"`
+      fix: packageEngineFixCommand(file, context)
     }));
   }
   const volta = asRecord(parsed.volta);
@@ -30829,6 +30842,8 @@ async function scanWorkflow(file, contents, context) {
       if (nodeVersionFile) {
         const versionFile = nodeVersionFile.trim();
         const versionBasename = versionFile.split("/").at(-1) ?? versionFile;
+        const standardVersionFile = [".nvmrc", ".node-version", ".tool-versions", "package.json"].includes(versionBasename);
+        const referencedFileIsIgnored = isIgnoredByFileScan(versionFile, normalizedIgnoredPaths(context.options.ignorePaths));
         try {
           const versionContents = await readText(context.rootDir, versionFile);
           if (versionBasename === ".tool-versions" && versionContents.trim() && !toolVersionsHasNodeDeclaration(versionContents)) {
@@ -30843,8 +30858,14 @@ async function scanWorkflow(file, contents, context) {
               fixable: false,
               fix: `Add "nodejs ${context.preferredMajor}" to ${versionFile}.`
             }));
-          } else if (![".nvmrc", ".node-version", ".tool-versions", "package.json"].includes(versionBasename)) {
-            violations.push(...scanNodeVersionFile(versionFile, versionContents, context));
+          } else if (!standardVersionFile || referencedFileIsIgnored) {
+            if (versionBasename === "package.json") {
+              violations.push(...scanPackageJson(versionFile, versionContents, context));
+            } else if (versionBasename === ".tool-versions") {
+              violations.push(...scanToolVersions(versionFile, versionContents, context));
+            } else {
+              violations.push(...scanNodeVersionFile(versionFile, versionContents, context));
+            }
           }
         } catch {
           violations.push(makeViolation({
@@ -31216,8 +31237,8 @@ function suggestedCommandsForViolations(violations, context) {
   const commands = /* @__PURE__ */ new Set();
   for (const violation of violations) {
     if (violation.kind === "package-engines") {
-      commands.add('npm pkg set engines.node="' + context.minimumEngineRange + '"');
-      commands.add("npm install --package-lock-only");
+      commands.add(packageEngineFixCommand(violation.file, context));
+      commands.add(packageLockRefreshCommand(violation.file));
     } else if (violation.kind === "node-version-file") {
       commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.file);
     } else if (violation.kind === "setup-node-version-file") {

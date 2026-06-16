@@ -198,8 +198,33 @@ function hasDefaultIgnoredSegment(relPath: string): boolean {
   return relPath.split('/').some((segment) => DEFAULT_IGNORES.has(segment));
 }
 
+function normalizedIgnoredPaths(ignorePaths: string[] | undefined = []): Set<string> {
+  return new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, '').replace(/\/$/u, '')));
+}
+
+function isIgnoredByFileScan(relPath: string, ignored: Set<string>): boolean {
+  const firstSegment = relPath.split('/')[0] ?? relPath;
+  return hasDefaultIgnoredSegment(relPath) ||
+    ignored.has(relPath) ||
+    ignored.has(firstSegment) ||
+    [...ignored].some((ignore) => relPath.startsWith(`${ignore}/`));
+}
+
 function relDir(file: string): string {
   return dirname(file) === '.' ? '.' : dirname(file);
+}
+
+function npmPrefixForPackageFile(file: string): string {
+  const packageDir = relDir(file);
+  return packageDir === '.' ? 'npm' : `npm --prefix ${packageDir}`;
+}
+
+function packageEngineFixCommand(file: string, context: ScanContext): string {
+  return `${npmPrefixForPackageFile(file)} pkg set engines.node="${context.minimumEngineRange}"`;
+}
+
+function packageLockRefreshCommand(file: string): string {
+  return `${npmPrefixForPackageFile(file)} install --package-lock-only`;
 }
 
 function dependencyMetadataLockDirs(files: string[]): Set<string> {
@@ -231,18 +256,14 @@ function installedPackageDirsToScan(files: string[], metadataLockDirs: Set<strin
 
 async function listFiles(rootDir: string, ignorePaths: string[] = []): Promise<string[]> {
   const files: string[] = [];
-  const ignored = new Set(ignorePaths.map((entry) => entry.replace(/^\.?\//u, '').replace(/\/$/u, '')));
+  const ignored = normalizedIgnoredPaths(ignorePaths);
 
   async function walk(dir: string): Promise<void> {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = join(dir, entry.name);
       const relPath = normalizeRelPath(rootDir, fullPath);
-      const firstSegment = relPath.split('/')[0] ?? relPath;
-      if (hasDefaultIgnoredSegment(relPath) || ignored.has(relPath) || ignored.has(firstSegment)) {
-        continue;
-      }
-      if ([...ignored].some((ignore) => relPath.startsWith(`${ignore}/`))) {
+      if (isIgnoredByFileScan(relPath, ignored)) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -293,7 +314,7 @@ function scanPackageJson(file: string, contents: string, context: ScanContext): 
         current: '(missing)',
         expected: context.minimumEngineRange,
         fixable: true,
-        fix: `npm pkg set engines.node="${context.minimumEngineRange}"`
+        fix: packageEngineFixCommand(file, context)
       }));
     }
   } else if (hasLowerNodeRange(engineRange, context)) {
@@ -306,7 +327,7 @@ function scanPackageJson(file: string, contents: string, context: ScanContext): 
       current: engineRange,
       expected: context.minimumEngineRange,
       fixable: true,
-      fix: `npm pkg set engines.node="${context.minimumEngineRange}"`
+      fix: packageEngineFixCommand(file, context)
     }));
   }
 
@@ -589,6 +610,8 @@ async function scanWorkflow(file: string, contents: string, context: ScanContext
       if (nodeVersionFile) {
         const versionFile = nodeVersionFile.trim();
         const versionBasename = versionFile.split('/').at(-1) ?? versionFile;
+        const standardVersionFile = ['.nvmrc', '.node-version', '.tool-versions', 'package.json'].includes(versionBasename);
+        const referencedFileIsIgnored = isIgnoredByFileScan(versionFile, normalizedIgnoredPaths(context.options.ignorePaths));
         try {
           const versionContents = await readText(context.rootDir, versionFile);
           if (versionBasename === '.tool-versions' && versionContents.trim() && !toolVersionsHasNodeDeclaration(versionContents)) {
@@ -603,8 +626,14 @@ async function scanWorkflow(file: string, contents: string, context: ScanContext
               fixable: false,
               fix: `Add "nodejs ${context.preferredMajor}" to ${versionFile}.`
             }));
-          } else if (!['.nvmrc', '.node-version', '.tool-versions', 'package.json'].includes(versionBasename)) {
-            violations.push(...scanNodeVersionFile(versionFile, versionContents, context));
+          } else if (!standardVersionFile || referencedFileIsIgnored) {
+            if (versionBasename === 'package.json') {
+              violations.push(...scanPackageJson(versionFile, versionContents, context));
+            } else if (versionBasename === '.tool-versions') {
+              violations.push(...scanToolVersions(versionFile, versionContents, context));
+            } else {
+              violations.push(...scanNodeVersionFile(versionFile, versionContents, context));
+            }
           }
         } catch {
           violations.push(makeViolation({
@@ -1002,8 +1031,8 @@ function suggestedCommandsForViolations(violations: PolicyViolation[], context: 
   const commands = new Set<string>();
   for (const violation of violations) {
     if (violation.kind === 'package-engines') {
-      commands.add('npm pkg set engines.node="' + context.minimumEngineRange + '"');
-      commands.add('npm install --package-lock-only');
+      commands.add(packageEngineFixCommand(violation.file, context));
+      commands.add(packageLockRefreshCommand(violation.file));
     } else if (violation.kind === 'node-version-file') {
       commands.add("printf '" + context.preferredMajor + "\\n' > " + violation.file);
     } else if (violation.kind === 'setup-node-version-file') {
