@@ -130,3 +130,11 @@ git push origin v1
 After the tags exist, `postman-cs/postman-node-policy-action@v1` is resolvable
 for the organization ruleset required workflow. Future releases keep immutable
 `v1.x.y` tags and move only the rolling `v1` alias.
+
+## CI
+
+`.github/workflows/ci.yml` runs a single `gate` job that fans out lint, test,
+typecheck, dist, and actionlint as backgrounded shell processes on one runner:
+wall-clock is `max(gate)`, not `sum`, setup runs once, and every gate prints its
+result under a `::group::` block even when another fails. This action carries no
+commit-message gate, so commitlint is not part of the fan-out.
