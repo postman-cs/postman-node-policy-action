@@ -42,4 +42,14 @@ describe('required workflow', () => {
       }
     });
   });
+
+  test('repository CI rejects scratch paths and pins actionlint', () => {
+    const workflow = readFileSync(resolve(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+
+    expect(workflow).toContain('run: node scripts/check-tracked-scratch-paths.mjs');
+    expect(workflow).toContain(
+      'https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash'
+    );
+    expect(workflow).not.toContain('/main/scripts/download-actionlint.bash');
+  });
 });

@@ -17,10 +17,12 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Reject tracked scratch paths
+        run: node scripts/check-tracked-scratch-paths.mjs
       - run: npm ci
       - name: Install actionlint
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
           echo "ACTIONLINT_BIN=$RUNNER_TEMP/actionlint" >> "$GITHUB_ENV"
       # All checks run in parallel as backgrounded shell processes on one runner,
       # so wall-clock is max(gate), not sum, and setup/npm-ci run once. Failures
