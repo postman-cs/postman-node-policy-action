@@ -18,7 +18,7 @@ describe('required workflow', () => {
       contents: 'read'
     });
     const steps = workflow.jobs['node-policy'].steps;
-    expect(steps[0]).toEqual({ uses: 'actions/checkout@v6' });
+    expect(steps[0]).toEqual({ uses: 'actions/checkout@v6', with: { 'persist-credentials': false } });
     expect(steps[1]).toEqual({
       uses: 'actions/setup-node@v6',
       with: {
